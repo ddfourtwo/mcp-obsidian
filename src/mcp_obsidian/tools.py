@@ -255,12 +255,22 @@ class PatchContentToolHandler(ToolHandler):
                        "enum": ["heading", "block", "frontmatter"]
                    },
                    "target": {
-                       "type": "string", 
+                       "type": "string",
                        "description": "Target identifier (heading path, block reference, or frontmatter field)"
                    },
                    "content": {
                        "type": "string",
                        "description": "Content to insert"
+                   },
+                   "create_if_missing": {
+                       "type": "boolean",
+                       "description": "Whether to create the target if it doesn't exist (default: false)",
+                       "default": False
+                   },
+                   "trim_whitespace": {
+                       "type": "boolean",
+                       "description": "Whether to trim whitespace from target before matching (default: false)",
+                       "default": False
                    }
                },
                "required": ["filepath", "operation", "target_type", "target", "content"]
@@ -271,21 +281,68 @@ class PatchContentToolHandler(ToolHandler):
        if not all(k in args for k in ["filepath", "operation", "target_type", "target", "content"]):
            raise RuntimeError("filepath, operation, target_type, target and content arguments required")
 
-       api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
-       api.patch_content(
-           args.get("filepath", ""),
-           args.get("operation", ""),
-           args.get("target_type", ""),
-           args.get("target", ""),
-           args.get("content", "")
-       )
+       try:
+           api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
 
-       return [
-           TextContent(
-               type="text",
-               text=f"Successfully patched content in {args['filepath']}"
+           # Extract optional parameters
+           create_if_missing = args.get("create_if_missing", False)
+           trim_whitespace = args.get("trim_whitespace", False)
+
+           # If this is a heading target, try to find the heading first to provide better feedback
+           if args.get("target_type") == "heading":
+               # Try to get headings from the file
+               headings = api.find_headings(args["filepath"])
+               if headings:
+                   # Check if the target heading exists
+                   target_heading = args["target"]
+                   matching_headings = [h for h in headings if h["path"] == target_heading]
+
+                   if not matching_headings and not create_if_missing:
+                       # If no exact match, try to find similar headings
+                       similar_headings = [h["path"] for h in headings if target_heading in h["path"] or h["path"] in target_heading]
+
+                       if similar_headings:
+                           suggestion = f"No exact match for heading '{target_heading}'. Similar headings: {', '.join(similar_headings)}"
+                           if trim_whitespace:
+                               suggestion += ". Target already has trim_whitespace=true."
+                           else:
+                               suggestion += ". Consider using trim_whitespace=true or check exact heading path."
+
+                           return [
+                               TextContent(
+                                   type="text",
+                                   text=suggestion
+                               )
+                           ]
+
+           # Call the API with all parameters
+           api.patch_content(
+               args["filepath"],
+               args["operation"],
+               args["target_type"],
+               args["target"],
+               args["content"],
+               create_if_missing=create_if_missing,
+               trim_whitespace=trim_whitespace
            )
-       ]
+
+           return [
+               TextContent(
+                   type="text",
+                   text=f"Successfully patched content in {args['filepath']}"
+               )
+           ]
+       except Exception as e:
+           # Provide a more user-friendly error message
+           error_message = str(e)
+
+           # Add suggestions based on the error
+           if "404" in error_message and args.get("target_type") == "heading":
+               error_message += "\n\nSuggestion: Check that the heading exists exactly as specified. You can use trim_whitespace=true to ignore whitespace differences, or create_if_missing=true to create the heading if it doesn't exist."
+           elif "400" in error_message:
+               error_message += "\n\nSuggestion: Verify that your operation, target_type, and target values are valid. Heading paths should use :: as delimiters between levels."
+
+           raise RuntimeError(error_message)
 
 class DeleteFileToolHandler(ToolHandler):
    def __init__(self):
@@ -539,7 +596,7 @@ class RecentChangesToolHandler(ToolHandler):
         limit = args.get("limit", 10)
         if not isinstance(limit, int) or limit < 1:
             raise RuntimeError(f"Invalid limit: {limit}. Must be a positive integer")
-            
+
         days = args.get("days", 90)
         if not isinstance(days, int) or days < 1:
             raise RuntimeError(f"Invalid days: {days}. Must be a positive integer")
@@ -553,3 +610,149 @@ class RecentChangesToolHandler(ToolHandler):
                 text=json.dumps(results, indent=2)
             )
         ]
+
+class AddToHeadingToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_add_to_heading")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="Add content to a specific heading in a note (simplified version of patch_content).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Path to the file (relative to vault root)",
+                        "format": "path"
+                    },
+                    "heading": {
+                        "type": "string",
+                        "description": "Heading text (exact match or partial match with trim_whitespace=true)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to add to the heading section"
+                    },
+                    "position": {
+                        "type": "string",
+                        "description": "Where to add the content - start or end of the section (default: end)",
+                        "enum": ["start", "end"],
+                        "default": "end"
+                    },
+                    "trim_whitespace": {
+                        "type": "boolean",
+                        "description": "Whether to trim whitespace from heading before matching (default: true)",
+                        "default": True
+                    },
+                    "create_if_missing": {
+                        "type": "boolean",
+                        "description": "Whether to create the heading if it doesn't exist (default: false)",
+                        "default": False
+                    },
+                    "list_headings": {
+                        "type": "boolean",
+                        "description": "If true, returns a list of all headings in the file before proceeding (default: false)",
+                        "default": False
+                    }
+                },
+                "required": ["filepath", "heading", "content"]
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        if not all(k in args for k in ["filepath", "heading", "content"]):
+            raise RuntimeError("filepath, heading, and content arguments required")
+
+        filepath = args["filepath"]
+        heading = args["heading"]
+        content = args["content"]
+        position = args.get("position", "end")
+        trim_whitespace = args.get("trim_whitespace", True)
+        create_if_missing = args.get("create_if_missing", False)
+        list_headings = args.get("list_headings", False)
+
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+
+        # If list_headings is true, get all headings first
+        if list_headings:
+            try:
+                headings = api.find_headings(filepath)
+                if headings:
+                    heading_list = "\n".join([f"Level {h['level']}: {h['text']} (path: {h['path']})" for h in headings])
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Headings in {filepath}:\n\n{heading_list}\n\nUse one of these paths with the 'heading' parameter to target a specific section."
+                        )
+                    ]
+                else:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"No headings found in {filepath}."
+                        )
+                    ]
+            except Exception as e:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Error getting headings: {str(e)}"
+                    )
+                ]
+
+        try:
+            # First, try to get the headings to find a match
+            headings = api.find_headings(filepath)
+
+            # Try to find an exact match first
+            exact_match = None
+            similar_matches = []
+
+            for h in headings:
+                if h["path"] == heading:
+                    exact_match = h["path"]
+                    break
+                elif heading in h["path"] or (trim_whitespace and heading.strip() in h["path"].strip()):
+                    similar_matches.append(h["path"])
+
+            # If we have an exact match, use it
+            if exact_match:
+                target = exact_match
+            # If we have similar matches and trim_whitespace is enabled, use the first one
+            elif similar_matches and trim_whitespace:
+                target = similar_matches[0]
+            # Otherwise use the heading as provided
+            else:
+                target = heading
+
+            # Convert position to operation
+            operation = "append" if position == "end" else "prepend"
+
+            # Call the patch_content method
+            api.patch_content(
+                filepath,
+                operation,
+                "heading",
+                target,
+                content,
+                create_if_missing=create_if_missing,
+                trim_whitespace=trim_whitespace
+            )
+
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Successfully added content to heading '{target}' in {filepath}"
+                )
+            ]
+        except Exception as e:
+            error_message = str(e)
+
+            # If we have headings but no match, suggest alternatives
+            if headings and "404" in error_message:
+                suggestions = "\n".join([f"- {h['path']}" for h in headings])
+                error_message += f"\n\nAvailable headings in {filepath}:\n{suggestions}\n\nTry using one of these heading paths or set create_if_missing=true to create a new heading."
+
+            raise RuntimeError(error_message)

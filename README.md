@@ -10,13 +10,56 @@ MCP server to interact with Obsidian via the Local REST API community plugin.
 
 The server implements multiple tools to interact with Obsidian:
 
-- list_files_in_vault: Lists all files and directories in the root directory of your Obsidian vault
-- list_files_in_dir: Lists all files and directories in a specific Obsidian directory
-- get_file_contents: Return the content of a single file in your vault.
-- search: Search for documents matching a specified text query across all files in the vault
-- patch_content: Insert content into an existing note relative to a heading, block reference, or frontmatter field.
-- append_content: Append content to a new or existing file in the vault.
-- delete_file: Delete a file or directory from your vault.
+#### Basic File Operations
+- `list_files_in_vault`: Lists all files and directories in the root directory of your Obsidian vault
+- `list_files_in_dir`: Lists all files and directories in a specific Obsidian directory
+- `get_file_contents`: Return the content of a single file in your vault
+- `batch_get_file_contents`: Get contents of multiple files at once
+- `append_content`: Append content to a new or existing file in the vault
+- `delete_file`: Delete a file or directory from your vault
+
+#### Content Editing
+- `patch_content`: Insert content into an existing note relative to a heading, block reference, or frontmatter field
+- `add_to_heading`: Simplified tool for adding content to a specific heading with better error handling and suggestions
+
+#### Search Tools
+- `simple_search`: Search for documents matching a specified text query across all files in the vault
+- `complex_search`: Advanced search using JsonLogic queries for complex filtering
+
+#### Periodic Notes
+- `get_periodic_note`: Get content of the current periodic note (daily, weekly, etc.)
+- `get_recent_periodic_notes`: Get a list of recent periodic notes
+- `get_recent_changes`: Get a list of recently modified files in the vault
+
+### Improved Features
+
+#### Simplified Heading Operations
+The `add_to_heading` tool provides a much easier way to work with headings:
+
+```python
+# List all headings in a note to see what's available
+result = obsidian_add_to_heading(
+    filepath="Notes/example.md",
+    heading="",  # Empty heading for listing
+    content="",  # Empty content for listing
+    list_headings=True
+)
+
+# Add content to a heading section
+result = obsidian_add_to_heading(
+    filepath="Notes/example.md",
+    heading="Section Header",
+    content="New content to add",
+    position="end",  # "start" or "end"
+    trim_whitespace=True  # More forgiving heading matching
+)
+```
+
+#### Better Error Handling
+All operations now provide detailed error messages with helpful suggestions, making it easier to troubleshoot issues when they occur.
+
+#### Path Normalization
+File paths are automatically normalized, handling both forward and backslashes consistently, and removing extra whitespace or slashes.
 
 ### Example prompts
 
